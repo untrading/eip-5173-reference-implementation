@@ -1,15 +1,16 @@
-# Basic Sample Hardhat Project
+# EIP-5173 Reference Implementation
+ 
+EIP-5173 proposes a multigenerational reward mechanism that rewards‌ all ‌owners of non-fungible tokens (NFT).
+ 
+## Setting Up
 
-This project demonstrates a basic Hardhat use case. It comes with a sample contract, a test for that contract, a sample script that deploys that contract, and an example of a task implementation, which simply lists the available accounts.
+Use Node 14.17.6 (nvm)
 
-Try running some of the following tasks:
+Install all dependencies -
+```npm install```
 
-```shell
-npx hardhat accounts
-npx hardhat compile
-npx hardhat clean
-npx hardhat test
-npx hardhat node
-node scripts/sample-script.js
-npx hardhat help
-```
+Test with hardhat -
+```npx hardhat test```
+
+Compile with hardhat - 
+```npx hardhat compile```
