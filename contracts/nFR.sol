@@ -26,6 +26,12 @@ abstract contract nFR is InFR, ERC721 {
         bool isValid; // Updated by contract and signifies if an FR Info for a given Token ID is valid
     }
 
+    struct ListInfo {
+        uint256 salePrice; // ETH mantissa of the listed selling price
+        address lister; // Owner/Lister of the Token
+        bool isListed; // Boolean indicating whether the Token is listed or not
+    }
+
     FRInfo private _defaultFRInfo;
 
     // Takes Token ID and returns corresponding FR Info
@@ -37,6 +43,9 @@ abstract contract nFR is InFR, ERC721 {
     // Takes Address and returns amount of ether available to address from FR payments
     mapping(address => uint256) private _allottedFR;
 
+    // Takes Token ID and returns corresponding ListInfo
+    mapping(uint256 => ListInfo) private _tokenListInfo;
+
     function supportsInterface(bytes4 interfaceId) public view virtual override(IERC165, ERC721) returns (bool) {
         return interfaceId == type(InFR).interfaceId || super.supportsInterface(interfaceId);
     }
@@ -45,14 +54,15 @@ abstract contract nFR is InFR, ERC721 {
         return (_tokenFRInfo[tokenId].numGenerations, _tokenFRInfo[tokenId].percentOfProfit, _tokenFRInfo[tokenId].successiveRatio, _tokenFRInfo[tokenId].lastSoldPrice, _tokenFRInfo[tokenId].ownerAmount, _addressesInFR[tokenId]);
     }
 
+    function retrieveListInfo(uint256 tokenId) public view virtual override returns(uint256, address, bool) {
+        return (_tokenListInfo[tokenId].salePrice, _tokenListInfo[tokenId].lister, _tokenListInfo[tokenId].isListed);
+    }
+
     function retrieveAllottedFR(address account) public view virtual override returns(uint256) {
         return _allottedFR[account];
     }
 
-    function transferFrom(address from, address to, uint256 tokenId, uint256 soldPrice) public virtual override payable {
-        require(soldPrice == msg.value, "soldPrice and msg.value mismatch");
-
-        require(_isApprovedOrOwner(_msgSender(), tokenId), "ERC721: transfer caller is not owner nor approved");
+    function _transferFrom(address from, address to, uint256 tokenId, uint256 soldPrice) internal virtual {
         ERC721._transfer(from, to, tokenId);
         require(_checkERC721Received(from, to, tokenId, ""), "ERC721: transfer to non ERC721Receiver implementer");
 
@@ -60,18 +70,43 @@ abstract contract nFR is InFR, ERC721 {
             _tokenFRInfo[tokenId].lastSoldPrice = soldPrice;
             _tokenFRInfo[tokenId].ownerAmount++;
             _shiftGenerations(to, tokenId);
-            (bool sent, ) = payable(_msgSender()).call{value: soldPrice}("");
-            require(sent, "Failed to return msg.value to msg.sender");
+            (bool sent, ) = payable(_tokenListInfo[tokenId].lister).call{value: soldPrice}("");
+            require(sent, "ERC5173: Failed to send msg.value to lister");
         } else {
             _distributeFR(tokenId, soldPrice);
             _tokenFRInfo[tokenId].lastSoldPrice = soldPrice;
             _tokenFRInfo[tokenId].ownerAmount++;
             _shiftGenerations(to, tokenId);
         }
+
+        delete _tokenListInfo[tokenId];
+    }
+
+    function list(uint256 tokenId, uint256 salePrice) public virtual override {
+        require(_isApprovedOrOwner(_msgSender(), tokenId), "ERC5173: list caller is not owner nor approved");
+
+        _tokenListInfo[tokenId] = ListInfo(salePrice, _msgSender(), true);
+    }
+
+    function unlist(uint256 tokenId) public virtual override {
+        require(_isApprovedOrOwner(_msgSender(), tokenId), "ERC5173: unlist caller is not owner nor approved");
+
+        delete _tokenListInfo[tokenId];
+    }
+
+    function buy(uint256 tokenId) public virtual override payable {
+        require(_tokenListInfo[tokenId].isListed == true, "Token is not listed");
+        require(_tokenListInfo[tokenId].salePrice == msg.value, "salePrice and msg.value mismatch");
+
+        _transferFrom(_tokenListInfo[tokenId].lister, _msgSender(), tokenId, _tokenListInfo[tokenId].salePrice);
     }
 
     function _transfer(address from, address to, uint256 tokenId) internal virtual override {
         super._transfer(from, to, tokenId);
+
+        if (_tokenListInfo[tokenId].isListed == true) {
+            delete _tokenListInfo[tokenId];
+        }
 
         _tokenFRInfo[tokenId].lastSoldPrice = 0;
         _tokenFRInfo[tokenId].ownerAmount++;
@@ -93,6 +128,7 @@ abstract contract nFR is InFR, ERC721 {
 
         delete _tokenFRInfo[tokenId];
         delete _addressesInFR[tokenId];
+        delete _tokenListInfo[tokenId];
     }
 
     function _mint(address to, uint256 tokenId, uint8 numGenerations, uint256 percentOfProfit, uint256 successiveRatio) internal virtual {
@@ -120,8 +156,8 @@ abstract contract nFR is InFR, ERC721 {
             allocatedFR += FR[reward];
         }
 
-        (bool sent, ) = payable(_msgSender()).call{value: soldPrice - allocatedFR}("");
-        require(sent, "Failed to return ETH after FR distribution to msg.sender");
+        (bool sent, ) = payable(_tokenListInfo[tokenId].lister).call{value: soldPrice - allocatedFR}("");
+        require(sent, "Failed to send ETH after FR distribution to lister");
 
         emit FRDistributed(tokenId, soldPrice, allocatedFR);
     }
@@ -183,16 +219,6 @@ abstract contract nFR is InFR, ERC721 {
         }
 
         return FR;
-    }
-
-    function testProfitCalculation(uint256 totalProfit, uint256 buyerReward, uint256 successiveRatio, uint256 ownerAmount, uint256 windowSize) pure public returns(uint256[] memory) {
-        uint256[] memory profits = _calculateFR(totalProfit, buyerReward, successiveRatio, ownerAmount, windowSize);
-
-        return profits;
-    }
-
-    function testUD(uint256 x, uint256 y) pure public returns(uint256) {
-        return PRBMathUD60x18.div(x, y);
     }
 
     function _checkERC721Received(
